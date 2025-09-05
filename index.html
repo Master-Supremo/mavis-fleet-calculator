@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Mavis Roads — Fleet ROI Calculator with Breakdown Simulation</title>
+<style>
+  body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial;background:#0a0f1a;color:#f0f3ff;padding:20px;}
+  h1{margin:0 0 16px 0;font-size:1.4rem}
+  .fleet{display:flex;flex-direction:column;gap:14px;}
+  .truck{background:#121a2a;padding:14px;border-radius:12px;border:1px solid #273350;}
+  label{display:block;font-size:0.8rem;color:#a0b4ff;margin-bottom:4px}
+  select,input[type=number]{width:100%;padding:8px;border-radius:8px;border:1px solid #273350;background:#0c1320;color:#fff}
+  .row{display:flex;gap:10px;margin-bottom:8px}
+  .col{flex:1}
+  button{cursor:pointer;border:none;border-radius:8px;padding:8px 12px}
+  .btn{background:#3a64ff;color:#fff}
+  .ghost{background:transparent;border:1px solid #3a64ff;color:#a0b4ff}
+  .summary{background:#182338;padding:14px;border-radius:12px;margin-top:16px}
+  .big{font-size:1.2rem;font-weight:700}
+  .fleet-actions{margin-bottom:14px}
+  .simResults{background:#202c44;padding:12px;border-radius:12px;margin-top:16px}
+</style>
+</head>
+<body>
+  <h1>Mavis Roads — Fleet Calculator</h1>
+  <div class="fleet-actions">
+    <button id="addTruck" class="btn">+ Add Truck</button>
+    <button id="calcFleet" class="ghost">Recalculate</button>
+  </div>
+  <div id="fleet" class="fleet"></div>
+  <div class="summary" id="fleetSummary">
+    <h3>Fleet Totals</h3>
+    <div>Gross RON / day: <span id="fleetGrossRON">—</span></div>
+    <div>Points / day: <span id="fleetPoints">—</span></div>
+    <div>Net RON / day: <span id="fleetNetDay">—</span></div>
+    <div>Net RON / 8 days: <span id="fleetNet8">—</span></div>
+    <div>Net RON / 10 days: <span id="fleetNet10">—</span></div>
+  </div>
+
+  <div class="summary">
+    <h3>Breakdown Simulation</h3>
+    <label>Season Length</label>
+    <select id="seasonLen"><option value="8">8 days</option><option value="10">10 days</option></select>
+    <label>Simulation Runs</label>
+    <input type="number" id="simRuns" value="1000" min="100" max="10000"/>
+    <button id="runSim" class="btn">Simulate Breakdowns</button>
+    <div id="simResults" class="simResults"></div>
+  </div>
+
+<script>
+(function(){
+  const RARITY = {
+    comfort:{name:"Comfort",ron:4,pts:1,trailerRon:1.0,trailerPts:1,breakdown:0.02},
+    highline:{name:"Highline",ron:5,pts:2,trailerRon:1.2,trailerPts:1,breakdown:0.018},
+    shift:{name:"Shift",ron:7,pts:3,trailerRon:1.5,trailerPts:1,breakdown:0.015},
+    electric:{name:"Electric",ron:9,pts:4,trailerRon:1.8,trailerPts:4,breakdown:0.012},
+    autonomous:{name:"Autonomous",ron:11,pts:5,trailerRon:2.2,trailerPts:5,breakdown:0.01}
+  };
+  const ENGINE_COST = {diesel:6, electric:10};
+
+  const fleetEl=document.getElementById("fleet");
+  const addBtn=document.getElementById("addTruck");
+  const calcBtn=document.getElementById("calcFleet");
+  const simBtn=document.getElementById("runSim");
+
+  function createTruckCard(){
+    const div=document.createElement("div"); div.className="truck";
+    div.innerHTML=`
+      <div class="row">
+        <div class="col"><label>Truck Rarity</label>
+          <select class="rarity">
+            <option value="comfort">Comfort</option>
+            <option value="highline">Highline</option>
+            <option value="shift">Shift</option>
+            <option value="electric">Electric</option>
+            <option value="autonomous">Autonomous</option>
+          </select>
+        </div>
+        <div style="width:100px"><label>Trips/day</label><input type="number" class="trips" value="2" min="0"/></div>
+      </div>
+      <div class="row">
+        <div class="col"><label>Trailer Paired?</label>
+          <select class="paired"><option value="yes">Yes</option><option value="no">No</option></select>
+        </div>
+        <div class="col"><label>Fuel Type</label>
+          <select class="fuel"><option value="diesel">Diesel</option><option value="electric">Electric</option></select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col"><label>Tools?</label>
+          <select class="tools"><option value="no">No</option><option value="yes">Yes</option></select>
+        </div>
+        <div style="width:80px;align-self:flex-end"><button class="ghost removeBtn">Remove</button></div>
+      </div>
+      <div class="smallRes">
+        Gross/day: <span class="resGross">—</span> | Net/day: <span class="resNet">—</span>
+      </div>
+    `;
+    div.querySelector(".removeBtn").onclick=()=>div.remove();
+    fleetEl.appendChild(div);
+  }
+
+  function calcFleet(){
+    let totalGross=0,totalPts=0,totalNet=0;
+    fleetEl.querySelectorAll(".truck").forEach(card=>{
+      const rarity=card.querySelector(".rarity").value;
+      const trips=+card.querySelector(".trips").value||0;
+      const paired=card.querySelector(".paired").value==="yes";
+      const fuel=card.querySelector(".fuel").value;
+      const tools=card.querySelector(".tools").value==="yes";
+
+      const d=RARITY[rarity];
+      const ronTrip=d.ron*(1+(paired?d.trailerRon/100:0));
+      const ptsTrip=d.pts+(paired?d.trailerPts:0);
+      const gross=ronTrip*trips;
+      const pts=ptsTrip*trips;
+      const fuelCost=(fuel==="electric"?1:2)*(trips/2);
+      const tireCost=4*(trips/4);
+      const garage=1/10;
+      const toolsCost=tools?1:0;
+      const maint=fuelCost+tireCost+garage+toolsCost;
+      const net=gross-maint;
+
+      totalGross+=gross; totalPts+=pts; totalNet+=net;
+
+      card.querySelector(".resGross").textContent=gross.toFixed(2);
+      card.querySelector(".resNet").textContent=net.toFixed(2);
+    });
+    document.getElementById("fleetGrossRON").textContent=totalGross.toFixed(2);
+    document.getElementById("fleetPoints").textContent=totalPts.toFixed(2);
+    document.getElementById("fleetNetDay").textContent=totalNet.toFixed(2);
+    document.getElementById("fleetNet8").textContent=(totalNet*8).toFixed(2);
+    document.getElementById("fleetNet10").textContent=(totalNet*10).toFixed(2);
+  }
+
+  function simulateBreakdowns(){
+    const seasonLen=+document.getElementById("seasonLen").value;
+    const runs=+document.getElementById("simRuns").value;
+    let totalBreaks=0,totalCost=0;
+    for(let r=0;r<runs;r++){
+      let runBreaks=0,runCost=0;
+      fleetEl.querySelectorAll(".truck").forEach(card=>{
+        const rarity=card.querySelector(".rarity").value;
+        const trips=+card.querySelector(".trips").value||0;
+        const fuel=card.querySelector(".fuel").value;
+        const tools=card.querySelector(".tools").value==="yes";
+        const d=RARITY[rarity];
+        let chance=d.breakdown;
+        if(tools) chance*=0.95;
+        const totalTrips=trips*seasonLen;
+        for(let t=0;t<totalTrips;t++){
+          if(Math.random()<chance){
+            runBreaks++;
+            runCost+=ENGINE_COST[fuel];
+          }
+        }
+      });
+      totalBreaks+=runBreaks;
+      totalCost+=runCost;
+    }
+    const avgBreaks=(totalBreaks/runs).toFixed(2);
+    const avgCost=(totalCost/runs).toFixed(2);
+    document.getElementById("simResults").innerHTML=`
+      <div>Season length: ${seasonLen} days</div>
+      <div>Simulation runs: ${runs}</div>
+      <div><b>Average breakdowns per fleet per season:</b> ${avgBreaks}</div>
+      <div><b>Expected engine replacement cost (RON):</b> ${avgCost}</div>
+    `;
+  }
+
+  addBtn.onclick=()=>{createTruckCard();};
+  calcBtn.onclick=calcFleet;
+  simBtn.onclick=simulateBreakdowns;
+  createTruckCard();
+})();
+</script>
+</body>
+</html>
